@@ -1,0 +1,577 @@
+		   FILE SERVICE PROTOCOL VERSION 2
+		     OFFICIAL PROTOCOL DEFINITION
+				FSP v2
+
+			Document version 0.19
+		      Last updated  01 Oct 2009
+
+			    Also known as
+		       File Slurping Protocol,
+			Flaky Stream Protocol,
+			FTP's Sexier Partner,
+		       File Sharing Protocol or
+			Fucking Slow Protocol.
+
+	       `FSP is what anonymous FTP *should* be'
+
+This document was created by Radim Kolar, because there is no RFC for
+FSP. It was planed, but never comes out. See FSP Project Home page
+http://fsp.sourceforge.net/ for up-to-date version of this document.
+Also contact Radim Kolar with questions and if you need help with an
+implementation of this protocol in productivity environment.
+
+This document is not copyrighted and is placed into public domain.
+
+Data formats used in this document:
+
+  byte - unsigned 1 byte integer 0-255
+  word - unsigned 2 byte integer 0-65535
+  long - unsigned 4 byte integer 0-4294967295
+  bits - counted from right to left. bit 0 is the lowest.
+  NULL - byte 00
+  ASCIIZ - ASCII string terminated with one NULL (the same as used in C
+           language)
+  Numbers are stored packed in network byte order (high byte first).
+     hexadecimal (base 16) numbers have 0x prefix.
+  File or directory names uses '/' as directory separator, they do not
+    need to start or end with it. There are in ASCIIZ format.
+    FSP servers starting from version 2.8 can have optional password
+    protection. To get password protected file, append '\n' followed
+    by password to filename.
+
+Uniform Resource Locator
+
+  Uniform resource locator format for FSP v2 protocol is:
+
+  fsp://password@hostname:port/directory/filename.ext
+
+  If port is omitted FSP standard port 21 is used, if password
+  part is omitted no password is sent. If no password is used URL must
+  not contain @ character before hostname. FSP URL do not have query
+  and anchor parts.
+
+Transport
+
+  FSP uses UDP datagrams as standard transport medium for operation in
+  Internet Networks.
+  
+  FSP datagram header has checksum and payload size recorded.  Because
+  of this FSP do not require any underlying transport protocol on
+  layer 2 and can be used as very simple raw-protocol (for example for
+  sending data over serial line). This makes it very popular in
+  embedded devices area, because it is extremely easy to implement.
+
+  FSP packets can have an optional extra data area. For supporting
+  packets with this, underlying transport must make size of received
+  packet available to FSP protocol stack at server side.  Without this
+  information, full support for extra data area is not possible.
+  Partial support for extra data is still possible: Some
+  commands are carrying size of extra data in file position field and
+  client side checksums contains total packet size. Using checksums
+  for decoding of length of extra data is last resort, because
+  checksums are only one byte in size.
+
+  Servers can still send extra data in reply to CC_VERSION and
+  CC_GET_PRO because length of extra data is recorded in position
+  field of FSP header. Clients must check this field, when checking
+  checksums of received packets of that kind and process these extra
+  bytes.
+
+  Minimum FSP packet size (not including size of UDP, IP and link
+  layer headers) is 12 bytes (FSP v2 header only), maximum standard
+  FSP packet size is 12 bytes of FSP v2 header and 1024 bytes of
+  payload.  Server can optionally accept longer packets, but must not
+  send longer packets to client unless specially requested. All
+  servers and clients must support receiving 1024+12 bytes long
+  packets.
+
+Security
+
+  Design
+
+  FSP protocol was not designed to transfer secret data. It was
+  designed as alternative protocol for providing lightweight access to
+  collection of public files. FSP has the same user level of security
+  as the anonymous FTP file server. FSP has better network level
+  security, because it was designed to resist various
+  denial-of-service attacks. FSP protocol v3 will be designed to be
+  fully secure. FSP3 will not be backward compatible with FSP2.
+
+  Passwords
+
+  Recently, password support was added to protocol, because just too
+  many people wants it and there were hacked version of FSP with
+  password support floating around. Passwords are transmitted in clear
+  text over network which makes them a weak protection for determined
+  intruder when transferred over unsecured network.
+
+FSP Packet format:
+  HEADER 		- size = Fixed size 12 bytes. Always present.
+  DATA         		- size = defined in header (DATA_LENGTH)
+  XTRA DATA		- size = packet_size - header_size (12) - DATA_LENGTH
+
+Size of data payload is DATA_LENGTH + XTRA_DATA length. Clients and
+servers are not required to support XTRA DATA (but current FSP
+implementation does).  If XTRA DATA are provided, there must be also
+contained in MESSAGE_CHECKSUM.
+
+FSP v2 HEADER FORMAT (12 bytes)
+ byte FSP_COMMAND
+ byte MESSAGE_CHECKSUM
+ word KEY
+ word SEQUENCE
+ word DATA_LENGTH
+ long FILE_POSITION
+
+MESSAGE_CHECKSUM
+Entire packet (HEADER + DATA + XTRA DATA) is checksummed.  When computing a
+checksum use zero in place of MESSAGE_CHECKSUM header field. 
+
+Method of computing checksums is different in each direction. For
+packets traveling from server to client initial checksum value is
+zero, otherwise initial value is packet size (HEADER + DATA + XTRA DATA).
+To get more information why checksums are different in each
+direction see comment about optional extra data in Transport section.
+
+Checksums in server->client direction are computed as follows:
+
+ /* assume that we have already zeroed checksum in packet */
+ unsigned int sum,checksum;
+ unsigned char *t;
+ for(t = packet_start, sum = 0; t < packet_end; sum += *t++);
+ checksum= sum + (sum >> 8);
+
+One byte checksums can be considered weak when compared with other
+protocols, which are using at least CRC16 checksum types. FSP server
+fed by random data can resist for hours without falsely accepting
+random data as valid FSP packet. This demonstration shows, that these
+checksums when very easy to compute, are sufficient for guarding
+against random line noise.
+
+Note:
+IP/UDP packet has its own CRC16 checksum, but FSP protocol checksum is
+used as protection against received non FSPv2 UDP packets.
+
+KEY
+Client's message to server contain a KEY value that is the same as the KEY
+value of the previous message received from the server. KEY is chosen random
+by server.
+
+Server uses one KEY per client network address. If multiple FSP clients
+on the same host wants access same FSP server at the same time, they
+must implement some local method of key exchange. If they don't server
+will serve only one client from host, because other clients do not
+have valid key.
+
+TIMEOUTS
+1. Resend
+
+Server will accept resent message from client with old KEY after 3
+seconds.  Client MUST wait at least 1 second before resending a
+message.  It is recommended to use initial delay of 1.34 second and
+after each unsuccessful resend multiply delay time by 1.5. Maximum
+delay time is 300 seconds. Recommended maximum delay between resend
+is 60 seconds.
+
+2. Session
+
+Server will accept message with bad key after 60 seconds. Clients
+should sent CC_BYE at end of their session because CC_BYE terminates a
+session.  After session is terminated, sever will accept any next key.
+
+SEQUENCE
+Similarly, the server's message to client contains a SEQUENCE value
+that is the same as the SEQUENCE value of the previous message from the client.
+Client can choose any SEQUENCE number and can use it for detection of lost
+packets (increase sequence number on message resend).
+
+DATA_LENGTH
+Size of DATA field in packet. Packet can also contain XTRA DATA field but
+size of this field is not included in header and must be computed from
+received packet size or from knowledge of FSP v2 packets formats (some
+packets carries length of extra data in position field).
+
+FILE POSITION
+When transferring files, this field shows current position of requested
+data.
+
+FSP COMMANDS
+============
+
+REQUIRED COMMANDS
+FSP File servers MUST supports following commands:
+- sending error messages back to client with CC_ERR
+- directory listings CC_GET_DIR
+- file transfer CC_GET_FILE
+- file status CC_STAT
+- information about directory flags CC_GET_PRO
+- terminate session CC_BYE
+If server supports packets with payload size over 1024 bytes, supporting
+CC_VERSION is recommended.
+
+
+ CC_VERSION     0x10		- Get server version string and setup
+
+                request
+                file position: ignored
+                data:          not used
+		xtra data:     not used
+
+		reply
+		file position:  size of optional extra version data
+		data:           ASCIIZ Server version string
+		xtra data:      optional extra version data
+				byte - FLAGS
+				        bit 0 set - server does logging
+					bit 1 set - server is read only
+					bit 2 set - reverse lookup required
+					bit 3 set - server is in private mode
+					bit 4 set - thruput control
+					bit 5 set - server accept XTRA
+					            DATA on input
+
+			        if bit 4 is set thruput info follows
+				long - max_thruput allowed (in bytes/sec)
+				word - max. payload size supported by server
+				         if > 1024, otherwise preferred
+					 payload size.
+
+	        Compatibility
+
+		Max. / preferred packet size supported is reported only
+		by fspd 2.8.1 b20 or newer.
+
+		Bit 5 - accept xtra data flag is set only by fspd
+		2.8.1 b21 or newer.
+
+		Note
+
+		Some FSP servers do not responds to this command,
+		because this command is used by FSP scanners and
+		servers do not wishes to be detected.
+
+ CC_ERR      0x40                -  error response from server
+
+ 		If you want to get a error from server, send
+		any unknown client command (for example CC_ERR).
+		CC_ERRs are normally sent only by server on
+		errors conditions.
+
+		request (not used)
+                file position: not used
+                data:          not used
+		xtra data:     not used
+
+		reply
+		file position:  size of extra data 
+		data:           ASCIIZ Error string
+		xtra data:	not required
+                                word - error status code
+                
+                Error status codes are not currently standardised. If you
+                wish to participate in standardization process join FSP-devel
+                mailing list. For use in your own software use vendor-specific
+                error codes which have reserved range 0xF000 - 0xFFFF.
+
+                Compatibility
+
+                Support for sizing of extra data in reply was added
+                in fsp 2.8.1b26. Previous versions left this field
+                unchanged. In old versions it will most likely contain
+                file position used by requests but not always. In some
+                code paths in fspd it will be just uninitialized memory.
+                Its recommended to check if file position in reply is 2
+                otherwise it should be processed as containing zero.
+
+ CC_GET_DIR  0x41		- get a directory listing
+
+ 		request
+		file position:  position in directory
+		data:           ASCIIZ directory name
+		xtra data:	(not required)
+		                word - preferred size of directory block
+
+		reply
+		file position:  same as in request
+		data:           directory listing (format follows)
+		xtra data:	not used
+
+Directory listing is transferred in similar way as file transfer.
+Directory listing is divided into blocks of equal size, only exception
+is last block which can be shorter. Default size of directory listing
+block is 1024 bytes. Server can use preferred block size sent by client
+and split directory listing into blocks with size preferred by client.
+
+Directory blocks can't be split across message boundary and client
+can't do seeking to any arbitrary offset, which can broke dirblock
+into 2 messages. In short: Every message must contain only one
+unsplited directory block.
+
+RDIRENT is the structure of a directory entry contained in a directory listing.
+Each entry contains a HEADER, which has 4 bytes quantity 'time' in Unix
+standard format, a 4 bytes quantity 'size', and 1 byte of 'type'.  Header is
+followed by ASCIIZ encoded 'name'. RDIRENT is followed by enough number of
+padding to fill to an 4-byte boundary.
+
+At this point, if the next RDIRENT entry to follow will spread across
+directory block boundary, then two possible things will happen:
+
+  1) if the HEADER fits between this entry and the directory block
+  boundary, a complete header will be filled in with a 'type' set to
+  RDTYPE_SKIP and no name followed - just pad to boundary. Clients
+  which sees RDTYPE_SKIP header skips over remaining data in packet.
+
+  2) if the HEADER does not fit, then simply pad to the directory
+  block boundary.
+
+  This will make sure that messages carrying directory information carry only
+  complete directory entries and no fragmented entries.
+
+The last entry has type RDTYPE_END.
+
+        struct RDIRENT {
+	       struct HEADER {
+	                      long  time;
+                              long  size;
+                              byte  type;
+			     }
+	       ASCIIZ name;
+		       }
+
+RDIRENT.HEADER types:
+  RDTYPE_END      0x00
+  RDTYPE_FILE     0x01
+  RDTYPE_DIR      0x02
+  RDTYPE_SKIP     0x2A
+
+ If directory listing contains symlink server can encode symlink
+ as source\ndestination\0. File type is set to the destination of
+ symlink RDTYPE_FILE or RDTYPE_DIR. Servers are not required to
+ support this feature.
+ 
+ CC_GET_FILE 0x42		- get a file
+
+ 		request
+		file position:	offset in file
+		data:           ASCIIZ filename
+		xtra data:	(not required)
+		                word - preferred size of reply's data block
+
+		reply
+		file position:  same as in request
+		data:           binary file data
+		xtra data:	not used
+
+ CC_UP_LOAD 0x43		- open a file for writing
+
+ 		request
+		file position:	offset in file
+		data:           binary file data
+		xtra data:	not used
+
+		reply
+		file position:  same as in request
+		data:           not used
+		xtra data:	not used
+
+ CC_INSTALL 0x44		- close and install file opened for writing
+
+ 		request
+		file position:	length of extra data
+		data:           ASCIIZ filename
+		xtra data:	(not required)
+		                long - timestamp in Unix format
+
+		reply
+		file position:  not used
+		data:           not used
+		xtra data:	not used
+
+		To cancel upload in progress without installing any
+		file send CC_INSTALL command with zero length (only 00
+		terminator) filename. This removes temporary data
+		created by upload.
+
+		Compatibility
+
+		Upload cancel feature and sizing of extra data was
+		first used in fsp 2.8.1b22.
+
+ CC_DEL_FILE 0x45		- delete a file
+
+ 		request
+		file position:	not used
+		data:           ASCIIZ filename
+		xtra data:	not used
+
+		reply
+		file position:  not used
+		data:           not used
+		xtra data:	not used
+
+ CC_DEL_DIR 0x46		- delete a directory
+
+ 		request
+		file position:	not used
+		data:           ASCIIZ directory
+		xtra data:	not used
+
+		reply
+		file position:  not used
+		data:           not used
+		xtra data:	not used
+
+ CC_GET_PRO 0x47 		- get directory protection
+
+ 		request
+		file position:	not used
+		data:           ASCIIZ directory
+		xtra data:	(not required)
+		                word - preferred size of reply's optional data
+                                       (used for readme) + xtra data
+
+		reply
+		file position:  number of extra protection bytes (now 1)
+		data:           ASCIIZ directory readme
+		xtra data:	protection data (format follows)
+
+		Protection bits:
+		   0 - caller owns the directory                  0x01
+		   1 - files can be deleted from this dir         0x02
+		   2 - files can be added to this dir             0x04
+		   3 - new subdirectories can be created          0x08
+		   4 - files are NOT readable by non-owners       0x10
+		   5 - directory contain an readme file           0x20
+		   6 - directory can be listed                    0x40
+		   7 - files can be renamed in this directory     0x80
+
+	        Compatibility
+		
+		Versions older than 2.8.1b6 do not uses bits 6 and 7. This
+		causes that directory can be listable even if do not have
+		6th bit set.
+
+ CC_SET_PRO 0x48		- set directory protection
+
+ 		request
+		file position:	size of extra data
+		data:           ASCIIZ directory
+		xtra data:	2 bytes of protection change command
+		                1st byte:
+		                 <'+'|'-'> set or remove protection
+				2nd byte:
+				<'c'|'d'|'g'|'m'|'l'|'r'>
+				 c    public can create files
+				 d    public can delete files
+				 g    public can get files
+				 m    public can create directories here
+				 l    public can list directory
+				 r    public can rename files
+
+		reply
+		  same as CC_GET_PRO
+		  
+		Compatibility
+		FSP versions older than 2.8.1 beta15 used p flag instead
+		g flag. +p = -g
+
+		Sizing of extra data in request was added in
+		fsp2.8.1b22.
+
+ CC_MAKE_DIR 0x49		- create a directory
+
+ 		request
+		file position:	not used
+		data:           ASCIIZ directory name
+		xtra data:	not used
+
+ 		reply
+		  same as CC_GET_PRO
+
+ CC_BYE 0x4A			- finish a session
+ 		request
+		file position:	not used
+		data:           not used
+		xtra data:	not used
+
+ 		reply
+		file position:	not used
+		optional data:  not used
+		xtra data:	not used
+
+		You should send this packet when you are done with
+		talking to server. This causes that server will
+		accept next packet from your IP with any key.
+
+Commands starting from FSP version 2.4 ( released March 27, 1992 )
+
+ CC_GRAB_FILE 0x4B		- atomic get+delete a file
+
+                same format as CC_GET_FILE, but file is deleted after
+		successful transfer is done. If there are multiple
+		grabs for the same file, only one will succeed.
+
+ CC_GRAB_DONE 0x4C		- atomic get+delete a file done
+
+				same format as CC_INSTALL. File is not
+				installed, but deleted.
+
+Commands starting from FSP 2.8.1 Beta 11
+
+ CC_STAT      0x4D		- get information about file/directory
+
+ 		request
+		file position:  not used
+		data:           ASCIIZ directory or file name
+		xtra data:	not used
+
+		reply
+		file position:  not used
+		data:           file stat info (format follows)
+		xtra data:	not used
+
+	data format is the same as in directory listing with exception
+	that there is no file name appended. If file do not exists or
+	there is other problem (no access rights) return type of file is
+	0.
+
+        struct STAT  {
+		      long  time;
+		      long  size;
+		      byte  type;
+	}
+
+	Compatibility
+	CC_ERR message is NEVER returned as reply to CC_STAT command
+	by server supporting CC_STAT command. If you have got CC_ERR reply,
+	you are talking to old server, which do not supports this
+	command.
+
+ CC_RENAME    0x4E 		- rename file or directory
+ 		request
+		file position:  size of extra data
+		data:           ASCIIZ source file or directory
+		xtra data:	ASCIIZ destination file or directory
+
+		Note: It is possible to do cross-directory rename. In this
+		case you must have rights to DELETE in source directory and
+		to CREATE in target directory.
+
+		reply
+		file position:  not used
+		data:           not used
+		xtra data:	not used
+
+ CC_CH_PASSW    0x4F        - change password
+                not yet specified
+
+Reserved commands:
+
+ CC_LIMIT 0x80			- commands > 0x7F will have extended
+ 				    header. No such extensions or commands
+				    which uses that are known today. This
+				    header will be used in protocol version 3.
+
+ CC_TEST  0x81			- reserved for testing of new header
+
+ignore this line vi: tw=70
