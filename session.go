@@ -2,7 +2,6 @@ package fsp
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -11,94 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 )
-
-// An Error represents a fsp error
-type Error interface {
-	error
-	Timeout() bool
-}
-
-// Stat file stat info
-type Stat struct {
-	name    string
-	size    int64
-	mode    os.FileMode
-	modTime time.Time
-}
-
-// Size length in bytes for regular file
-func (s Stat) Size() int64 {
-	return s.size
-}
-
-// Name base name of the file
-func (s Stat) Name() string {
-	return filepath.Base(s.name)
-}
-
-// Mode file mode bits
-func (s Stat) Mode() os.FileMode {
-	return s.mode
-}
-
-// ModTime modification time
-func (s Stat) ModTime() time.Time {
-	return s.modTime
-}
-
-// IsDir abbreviation for Mode().IsDir()
-func (s Stat) IsDir() bool {
-	return s.mode.IsDir()
-}
-
-// Sys underlying data source (can return nil)
-func (s Stat) Sys() interface{} {
-	return nil
-}
-
-// OpError is the error type usually returned by functions in the fsp package
-type OpError struct {
-	Cmd    uint8  // FSP command operator
-	Reason string // FSP command fail reason
-	Err    error
-}
-
-func newOpError(errStr string) (err *OpError) {
-	err = &OpError{
-		Err: errors.New(errStr),
-	}
-	return
-}
-
-// Timeout check is time out error
-func (e *OpError) Timeout() bool {
-	if e == nil {
-		return false
-	}
-	if strings.Contains(e.Reason, "time out") {
-		return true
-	}
-	if e.Err != nil && strings.Contains(e.Err.Error(), "timeout") {
-		return true
-	}
-	return false
-}
-
-func (e *OpError) Error() string {
-	var s string
-	if e == nil {
-		return "<nil>"
-	}
-	if e.Reason != "" {
-		s = e.Reason
-	} else {
-		s = e.Err.Error()
-	}
-	return s
-}
 
 type transUnit struct {
 	startTime time.Time
@@ -187,14 +100,14 @@ type Session struct {
 	verboseLvl int    // verbose level
 }
 
-// StartDownload set total download size
-func (s *Session) StartDownload(total int64) {
+// startDownload set total download size
+func (s *Session) startDownload(total int64) {
 	s.trans.Reset()
 	s.trans.totalSize = total
 }
 
-// FinishDownload complete transfer
-func (s *Session) FinishDownload() {
+// finishDownload complete transfer
+func (s *Session) finishDownload() {
 	s.trans.ShowSpeed()
 }
 
@@ -213,7 +126,7 @@ func (s *Session) transaction(pkt *fspPacket) (resp fspPacket, err error) {
 	retry = 0
 	for ; ; retry++ {
 		if time.Since(firstSend) > time.Duration(s.timeOut)*time.Second {
-			err = &OpError{Err: errors.New("transaction timeout")}
+			err = newOpError("transaction timeout")
 			break
 		}
 		pkt.seq = s.seq | (retry & 0x7)
@@ -260,8 +173,8 @@ func (s *Session) transaction(pkt *fspPacket) (resp fspPacket, err error) {
 			}
 			if resp.cmd == FSPCommandErr {
 				// fmt.Printf("Failed, code=%d,reason=\"%s\"\n", FSPCommandErr, resp.buf)
-				err = &OpError{Cmd: resp.cmd, Reason: string(resp.buf)}
-			} else if resp.cmd == FSPCommandGetFile || resp.cmd == FSPCommandGetFile2 {
+				err = &fspError{Cmd: resp.cmd, Reason: string(resp.buf)}
+			} else if resp.cmd == FSPCommandGetFile {
 				s.trans.updateUnit(retry, int64(resp.len))
 			}
 			s.clientSetKey(resp.key)
@@ -344,7 +257,7 @@ func (s *Session) randUint16() uint16 {
 	data:           directory listing (format follows)
 	xtra data:	not used
 */
-func (s *Session) getDir(dirName string) (dir *Dir, err error) {
+func (s *Session) getDir(dirName string) (di *dir, err error) {
 	var p fspPacket
 	var pos uint32
 	var resp fspPacket
@@ -356,7 +269,7 @@ func (s *Session) getDir(dirName string) (dir *Dir, err error) {
 	if err != nil {
 		return
 	}
-	dir = &Dir{}
+	di = &dir{}
 	p.cmd = FSPCommandGetDir
 	binary.BigEndian.PutUint16(tmpBuff, s.trans.pktSize)
 	p.buf = append(p.buf, tmpBuff...)
@@ -365,31 +278,31 @@ func (s *Session) getDir(dirName string) (dir *Dir, err error) {
 		p.pos = pos
 		resp, err = s.transaction(&p)
 		if err != nil {
-			dir.data = make([]byte, 0)
+			di.data = make([]byte, 0)
 			break
 		}
 		if resp.len == 0 {
 			break
 		}
-		if dir.blockSize == 0 {
-			dir.blockSize = resp.len
+		if di.blockSize == 0 {
+			di.blockSize = resp.len
 		}
-		dir.data = append(dir.data, resp.buf...)
+		di.data = append(di.data, resp.buf...)
 		pos += uint32(resp.len)
-		if resp.len < dir.blockSize {
+		if resp.len < di.blockSize {
 			break
 		}
 	}
 	if err != nil {
 		return
 	}
-	if len(dir.data) > 0 {
-		dir.inUse = 1
-		dir.dirName = dirName
-		dir.dataSize = uint(pos)
+	if len(di.data) > 0 {
+		di.inUse = 1
+		di.dirName = dirName
+		di.dataSize = uint(pos)
 	} else {
-		err = &OpError{Err: fmt.Errorf("read dir %s fail", dirName)}
-		dir = nil
+		err = newOpError(fmt.Sprintf("read dir %s fail", dirName))
+		di = nil
 	}
 	return
 }
@@ -397,7 +310,7 @@ func (s *Session) getDir(dirName string) (dir *Dir, err error) {
 // openFile open fsp file
 func (s *Session) openFile(remoteFile, mode string) (fspFile *File, err error) {
 	if remoteFile == "" || mode == "" {
-		err = &OpError{Err: errors.New("invald param for open fsp file")}
+		err = newOpError("invald param for open fsp file")
 		return
 	}
 	fspFile = &File{
@@ -413,12 +326,12 @@ func (s *Session) openFile(remoteFile, mode string) (fspFile *File, err error) {
 		fallthrough
 	default:
 		fspFile = nil
-		err = &OpError{Err: errors.New("not support")}
+		err = newOpError("not support")
 		return
 	}
 	if mode[1:] == "+" || mode[1:] == "b+" {
 		fspFile = nil
-		err = &OpError{Err: errors.New("not support")}
+		err = newOpError("not support")
 		return
 	}
 	fspFile.out.xlen = 0
@@ -454,14 +367,14 @@ func (s *Session) getFile(remotePath, savePath string, retry int) (err error) {
 	}
 	err = os.MkdirAll(filepath.Dir(saveFile), os.ModePerm)
 	if err != nil {
-		err = &OpError{Err: fmt.Errorf("create save directory fail, %v", err)}
+		err = newOpError(fmt.Sprintf("create save directory fail, %v", err))
 		s.verbose(1, "create save directory fail, %v", err)
 		return
 	}
 TRYAGAIN:
 	fp, err = os.Create(saveFile)
 	if err != nil {
-		err = &OpError{Err: fmt.Errorf("create file %s fail, %v", saveFile, err)}
+		err = newOpError(fmt.Sprintf("create file %s fail, %v", saveFile, err))
 		s.verbose(1, "create file %s fail, %v", saveFile, err)
 		return
 	}

@@ -9,15 +9,15 @@ import (
 
 // types of directory entry
 const (
-	FSPEntryTypeEnd  = 0x00
-	FSPEntryTypeFile = 0x01
-	FSPEntryTypeDir  = 0x02
-	FSPEntryTypeLink = 0x03
-	FSPEntryTypeSkip = 0x2A
+	fspEntryTypeEnd  = 0x00
+	fspEntryTypeFile = 0x01
+	fspEntryTypeDir  = 0x02
+	fspEntryTypeLink = 0x03
+	fspEntryTypeSkip = 0x2A
 )
 
-// DirEntry fsp directory entry info
-type DirEntry struct {
+// dirEntry fsp directory entry info
+type dirEntry struct {
 	Name       string
 	NameLen    uint16
 	Type       uint8
@@ -27,15 +27,15 @@ type DirEntry struct {
 }
 
 // Show display entry
-func (entry *DirEntry) Show() (resp string) {
+func (entry *dirEntry) Show() (resp string) {
 	var bb strings.Builder
 	var modify time.Time
 	switch entry.Type {
-	case FSPEntryTypeDir:
+	case fspEntryTypeDir:
 		bb.WriteString("dir    ")
-	case FSPEntryTypeFile:
+	case fspEntryTypeFile:
 		bb.WriteString("file   ")
-	case FSPEntryTypeLink:
+	case fspEntryTypeLink:
 		bb.WriteString("link   ")
 	default:
 		return
@@ -46,8 +46,8 @@ func (entry *DirEntry) Show() (resp string) {
 	return
 }
 
-// Dir fsp dir cache
-type Dir struct {
+// dir fsp dir cache
+type dir struct {
 	dirName   string
 	inUse     uint16
 	dirPos    int
@@ -57,15 +57,15 @@ type Dir struct {
 }
 
 // ListEntrys get all dir entrys
-func (dir *Dir) ListEntrys() (entrys []*DirEntry) {
+func (d *dir) ListEntrys() (entrys []*dirEntry) {
 	var err error
-	var entry *DirEntry
+	var entry *dirEntry
 	for {
-		if dir.dirPos < 0 || dir.dirPos%4 != 0 {
+		if d.dirPos < 0 || d.dirPos%4 != 0 {
 			// RDIRENT is followed by enough number of padding to fill to an 4-byte boundary.
 			break
 		}
-		entry, err = dir.ReadNative()
+		entry, err = d.ReadNative()
 		if err != nil || entry == nil {
 			break
 		}
@@ -85,39 +85,39 @@ struct RDIRENT {
 	ASCIIZ name;
 }
 */
-func (dir *Dir) ReadNative() (entry *DirEntry, err error) {
+func (d *dir) ReadNative() (entry *dirEntry, err error) {
 	var fType byte
 	var nameLen int
-	if dir.dirPos < 0 || dir.dirPos%4 != 0 {
+	if d.dirPos < 0 || d.dirPos%4 != 0 {
 		return
 	}
 	for {
-		if dir.dirPos >= int(dir.dataSize) {
+		if d.dirPos >= int(d.dataSize) {
 			// end of the directory
 			return
 		}
-		if int(dir.blockSize)-(dir.dirPos%int(dir.blockSize)) < 9 {
-			fType = FSPEntryTypeSkip
+		if int(d.blockSize)-(d.dirPos%int(d.blockSize)) < 9 {
+			fType = fspEntryTypeSkip
 		} else {
-			fType = dir.data[dir.dirPos+8]
+			fType = d.data[d.dirPos+8]
 		}
-		if fType == FSPEntryTypeEnd {
-			dir.dirPos = int(dir.dataSize)
+		if fType == fspEntryTypeEnd {
+			d.dirPos = int(d.dataSize)
 			continue
 		}
-		if fType == FSPEntryTypeSkip {
-			dir.dirPos = (dir.dirPos/int(dir.blockSize) + 1) * int(dir.blockSize)
+		if fType == fspEntryTypeSkip {
+			d.dirPos = (d.dirPos/int(d.blockSize) + 1) * int(d.blockSize)
 			continue
 		}
 		if entry == nil {
-			entry = &DirEntry{}
+			entry = &dirEntry{}
 		}
-		entry.LastModify = int64(binary.BigEndian.Uint32(dir.data[dir.dirPos:]))
-		entry.Size = uint(binary.BigEndian.Uint32(dir.data[dir.dirPos+4:]))
+		entry.LastModify = int64(binary.BigEndian.Uint32(d.data[d.dirPos:]))
+		entry.Size = uint(binary.BigEndian.Uint32(d.data[d.dirPos+4:]))
 		entry.Type = fType
-		dir.dirPos += 9
-		for l := dir.dirPos; l < int(dir.dataSize); l++ {
-			if dir.data[dir.dirPos+nameLen] == 0 {
+		d.dirPos += 9
+		for l := d.dirPos; l < int(d.dataSize); l++ {
+			if d.data[d.dirPos+nameLen] == 0 {
 				break
 			}
 			nameLen++
@@ -126,14 +126,14 @@ func (dir *Dir) ReadNative() (entry *DirEntry, err error) {
 			entry = nil
 			return
 		}
-		entry.Name = string(dir.data[dir.dirPos : dir.dirPos+nameLen])
+		entry.Name = string(d.data[d.dirPos : d.dirPos+nameLen])
 		entry.NameLen = uint16(nameLen)
-		dir.dirPos += nameLen + 1
+		d.dirPos += nameLen + 1
 		entry.RecordLen = uint16(nameLen) + 10
 		if entry.RecordLen%4 != 0 {
 			n := 4 - entry.RecordLen%4
 			entry.RecordLen += n
-			dir.dirPos += int(n)
+			d.dirPos += int(n)
 		}
 		break
 	}
@@ -152,7 +152,7 @@ type File struct {
 	out     fspPacket
 }
 
-// Read download fsp file
+// Read bytes from the file
 func (f *File) Read(buff []byte, size, count int) (done int, err error) {
 	var total = size * count
 	var resp fspPacket
@@ -179,8 +179,7 @@ func (f *File) Read(buff []byte, size, count int) (done int, err error) {
 	return
 }
 
-// Write download fsp file
-// 写入缓文件缓存，满了再发送，另外文件关闭时要发送缓存中的数据
+// Write bytes to file
 func (f *File) Write(buff []byte) (err error) {
 	var total, done int
 	var freeBytes, pos int

@@ -1,3 +1,24 @@
+/*
+Package fsp provides a interface for connect fsp server
+
+	package main
+	import (
+		"github.com/finove/fsp"
+		"fmt"
+	)
+
+	func main() {
+		var err error
+		var fspSession *fsp.Session
+		fspSession, err = fsp.NewSession("127.0.0.1:21", "123456")
+		if err != nil {
+			return
+		}
+		defer fspSession.Close()
+		fmt.Printf("fsp server version: %s\n", fspSession.Version())
+	}
+
+*/
 package fsp
 
 import (
@@ -9,39 +30,51 @@ import (
 	"time"
 )
 
-// Open open fsp session
-func (s *Session) Open(conn *net.UDPConn, addr *net.UDPAddr, password string) (err error) {
-	if conn == nil || addr == nil {
-		err = fmt.Errorf("invalid conn or addr")
+const (
+	// VERSION represent fsp lib version.
+	VERSION = "1.0.0"
+)
+
+// An Error represents a fsp error
+type Error interface {
+	error
+	Timeout() bool
+}
+
+// NewSession return a new Session
+func NewSession(serverAddress, password string) (session *Session, err error) {
+	var conn *net.UDPConn
+	conn, err = net.ListenUDP("udp4", nil)
+	if err != nil {
 		return
 	}
-	s.serverAddr = addr
-	s.conn = conn
-	s.loadKey()
-	s.setDefault()
-	s.password = password
-	s.verbose(0, "connect from %s to %s", s.conn.LocalAddr().String(), s.serverAddr.String())
+	session, err = NewSessionWithConn(conn, serverAddress, password)
 	return
 }
 
-// Connect open fsp session
-func (s *Session) Connect(serverAddress, password string) (err error) {
-	s.serverAddr, err = net.ResolveUDPAddr("udp4", serverAddress)
+// NewSessionWithConn return a new Session
+func NewSessionWithConn(conn *net.UDPConn, serverAddress, password string) (session *Session, err error) {
+	var addr *net.UDPAddr
+	if conn == nil || serverAddress == "" {
+		err = newOpError("invalid conn or server address")
+		return
+	}
+	addr, err = net.ResolveUDPAddr("udp4", serverAddress)
 	if err != nil {
 		return
 	}
-	if s.serverAddr.Port <= 0 {
-		err = fmt.Errorf("invalid server ip port %v", serverAddress)
+	if addr.Port == 0 {
+		err = newOpError("invalid server port")
 		return
 	}
-	s.conn, err = net.ListenUDP("udp4", nil)
-	if err != nil {
-		return
+	session = &Session{
+		serverAddr: addr,
+		conn:       conn,
+		password:   password,
 	}
-	s.loadKey()
-	s.setDefault()
-	s.password = password
-	s.verbose(0, "connect from %s to %s", s.conn.LocalAddr().String(), s.serverAddr.String())
+	session.loadKey()
+	session.setDefault()
+	session.verbose(0, "connect from %s to %s", session.conn.LocalAddr().String(), session.serverAddr.String())
 	return
 }
 
@@ -62,8 +95,8 @@ func (s *Session) Close() {
 	s.conn = nil
 }
 
-// Version get fsp server version
-func (s *Session) Version() (ver string) {
+// Version Get server version string and setup
+func (s *Session) Version() (version string) {
 	var pkt fspPacket
 	pkt.cmd = FSPCommandVersion
 	pkt.xlen = 0
@@ -72,31 +105,55 @@ func (s *Session) Version() (ver string) {
 	if err != nil {
 		return
 	}
-	ver = string(resp.buf[:resp.len])
+	version = string(resp.buf[:resp.len])
 	return
 }
 
-// ReadDir display the files of the dir
-func (s *Session) ReadDir(dirName string) (err error) {
-	var dir *Dir
-	var numFiles, numDirs, numLinks int
-	var entrys []*DirEntry
-	var entry *DirEntry
-	dir, err = s.getDir(dirName)
-	if err != nil || dir == nil {
+// Readdir reads the contents of the directory
+func (s *Session) Readdir(dirpath string) (fi []os.FileInfo, err error) {
+	var di *dir
+	var entrys []*dirEntry
+	var entry *dirEntry
+	di, err = s.getDir(dirpath)
+	if err != nil || di == nil {
 		return
 	}
-	entrys = dir.ListEntrys()
+	entrys = di.ListEntrys()
+	for _, entry = range entrys {
+		var st fileStat
+		st.name = entry.Name
+		st.modTime = time.Unix(entry.LastModify, 0)
+		st.size = int64(entry.Size)
+		if entry.Type == fspEntryTypeDir {
+			st.mode = os.ModeDir | 0755
+		} else {
+			st.mode = 0644
+		}
+	}
+	return
+}
+
+// ShowDir display the files of the dir
+func (s *Session) ShowDir(dirpath string) (err error) {
+	var di *dir
+	var numFiles, numDirs, numLinks int
+	var entrys []*dirEntry
+	var entry *dirEntry
+	di, err = s.getDir(dirpath)
+	if err != nil || di == nil {
+		return
+	}
+	entrys = di.ListEntrys()
 	fmt.Printf("[start]\n")
 	for _, entry = range entrys {
 		if entry.Name == "." || entry.Name == ".." {
 			continue
 		}
-		if entry.Type == FSPEntryTypeFile {
+		if entry.Type == fspEntryTypeFile {
 			numFiles++
-		} else if entry.Type == FSPEntryTypeDir {
+		} else if entry.Type == fspEntryTypeDir {
 			numDirs++
-		} else if entry.Type == FSPEntryTypeLink {
+		} else if entry.Type == fspEntryTypeLink {
 			numLinks++
 		}
 		fmt.Printf("%s\n", entry.Show())
@@ -113,18 +170,18 @@ func (s *Session) DwonloadFile(remotePath, savePath string, retry int) (err erro
 	if err != nil {
 		return
 	}
-	s.StartDownload(stat.Size())
+	s.startDownload(stat.Size())
 	err = s.getFile(remotePath, savePath, retry)
-	s.FinishDownload()
+	s.finishDownload()
 	return
 }
 
 // DownloadDirectory download dir from fsp server
 func (s *Session) DownloadDirectory(remotePath, savePath string) (err error) {
-	var dir *Dir
+	var di *dir
 	var totalSize, totalCount int
 	var saveDir, getFile, saveFile, tmpSaveFile string
-	var entrys []*DirEntry
+	var entrys []*dirEntry
 	var finfo os.FileInfo
 	if savePath == "" {
 		if remotePath[0] == '/' {
@@ -135,20 +192,20 @@ func (s *Session) DownloadDirectory(remotePath, savePath string) (err error) {
 	} else {
 		saveDir = savePath
 	}
-	dir, err = s.getDir(remotePath)
+	di, err = s.getDir(remotePath)
 	if err != nil {
 		return
 	}
-	entrys = dir.ListEntrys()
+	entrys = di.ListEntrys()
 	for _, entry := range entrys {
-		if entry.Type == FSPEntryTypeFile {
+		if entry.Type == fspEntryTypeFile {
 			totalCount++
 			totalSize += int(entry.Size)
 		}
 	}
-	s.StartDownload(int64(totalSize))
+	s.startDownload(int64(totalSize))
 	for _, entry := range entrys {
-		if entry.Type != FSPEntryTypeFile {
+		if entry.Type != fspEntryTypeFile {
 			continue
 		}
 		getFile = filepath.Join(remotePath, entry.Name)
@@ -171,38 +228,38 @@ func (s *Session) DownloadDirectory(remotePath, savePath string) (err error) {
 			fmt.Printf("get file %s done\n", entry.Name)
 		}
 	}
-	s.FinishDownload()
+	s.finishDownload()
 	return
 }
 
-// MkDir make directory
-func (s *Session) MkDir(directory string) (err error) {
+// Mkdir create a directory
+func (s *Session) Mkdir(directory string) (err error) {
 	return s.simpleCommand(directory, FSPCommandMakeDir)
 }
 
-// RmDir make directory
-func (s *Session) RmDir(directory string) (err error) {
-	return s.simpleCommand(directory, FSPCommandDelDir)
+// RemoveAll delete a directory
+func (s *Session) RemoveAll(path string) (err error) {
+	return s.simpleCommand(path, FSPCommandDelDir)
 }
 
-// Unlink delete directory
-func (s *Session) Unlink(directory string) (err error) {
-	return s.simpleCommand(directory, FSPCommandDelFile)
+// Remove delete a file
+func (s *Session) Remove(name string) (err error) {
+	return s.simpleCommand(name, FSPCommandDelFile)
 }
 
 // Rename rename file
-func (s *Session) Rename(from, to string) (err error) {
+func (s *Session) Rename(oldpath, newpath string) (err error) {
 	var out fspPacket
-	err = out.buildFileName(from, s.password)
+	err = out.buildFileName(oldpath, s.password)
 	if err != nil {
 		return
 	}
-	if (len(to) + int(out.len)) > FSPSpace {
+	if (len(newpath) + int(out.len)) > FSPSpace {
 		err = newOpError("file name too long")
 		return
 	}
-	copy(out.buf[out.len:], to[:])
-	out.xlen = uint16(len(to))
+	copy(out.buf[out.len:], newpath[:])
+	out.xlen = uint16(len(newpath))
 	if s.password != "" {
 		if out.len+out.xlen > FSPSpace {
 			err = newOpError("file name too long")
@@ -289,12 +346,12 @@ func (s *Session) GetProtecion(directory string) (protection uint8, err error) {
 	return
 }
 
-// Stat get file stat
-func (s *Session) Stat(rPath string) (info os.FileInfo, err error) {
-	var st Stat
+// Stat get information about file/directory
+func (s *Session) Stat(name string) (info os.FileInfo, err error) {
+	var st fileStat
 	var out fspPacket
 	var resp fspPacket
-	err = out.buildFileName(rPath, s.password)
+	err = out.buildFileName(name, s.password)
 	if err != nil {
 		return
 	}
@@ -310,10 +367,10 @@ func (s *Session) Stat(rPath string) (info os.FileInfo, err error) {
 		return
 	}
 	var modTime = binary.BigEndian.Uint32(resp.buf[:4])
-	st.name = rPath
+	st.name = name
 	st.modTime = time.Unix(int64(modTime), 0)
 	st.size = int64(binary.BigEndian.Uint32(resp.buf[4:]))
-	if resp.buf[8] == FSPEntryTypeDir {
+	if resp.buf[8] == fspEntryTypeDir {
 		st.mode = os.ModeDir | 0755
 	} else {
 		st.mode = 0644

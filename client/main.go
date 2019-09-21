@@ -97,7 +97,7 @@ func main() {
 	}
 
 	app.Action = func(c *cli.Context) (err error) {
-		var fspSession fsp.Session
+		var fspSession *fsp.Session
 		var addr *net.UDPAddr
 		var conn *net.UDPConn
 		addr, conn, err = getFSPServerIP()
@@ -105,7 +105,7 @@ func main() {
 			log.Printf("Failed, get fsp server ip %v", err)
 			return
 		}
-		err = fspSession.Open(conn, addr, serverPass)
+		fspSession, err = fsp.NewSessionWithConn(conn, addr.String(), serverPass)
 		if err != nil {
 			log.Printf("Failed, open fsp session %v", err)
 			return
@@ -113,7 +113,7 @@ func main() {
 		if showServerVersion {
 			fmt.Printf("fsp server version: %s\n", fspSession.Version())
 		} else if cmdLS != "" {
-			err = fspSession.ReadDir(cmdLS)
+			err = fspSession.ShowDir(cmdLS)
 			if err != nil {
 				log.Printf("Failed, read dir %v", err)
 			}

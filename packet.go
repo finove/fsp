@@ -27,10 +27,9 @@ const (
 	FSPCommandChangePass = 0x4F /* change password                      */
 	FSPCommandLimit      = 0x80 /* # > 0x7f for future cntrl blk ext.   */
 	FSPCommandTest       = 0x81 /* reserved for testing                 */
-	FSPCommandGetFile2   = 0x39 /* get a file with new proc.            */
 )
 
-// FSP常量
+// FSP packet
 const (
 	FSPHSzie     = 12
 	FSPSpace     = 14708
@@ -39,12 +38,12 @@ const (
 
 // byte offsets of fields in the FSP v2 header
 const (
-	FSPOffsetCmd = 0
-	FSPOffsetSum = 1
-	FSPOffsetKey = 2
-	FSPOffsetSeq = 4
-	FSPOffsetLen = 6
-	FSPOffsetPos = 8
+	fspOffsetCmd = 0
+	fspOffsetSum = 1
+	fspOffsetKey = 2
+	fspOffsetSeq = 4
+	fspOffsetLen = 6
+	fspOffsetPos = 8
 )
 
 // directory protection bits
@@ -85,18 +84,18 @@ func (pkt *fspPacket) read(buff []byte) (err error) {
 	for _, b := range buff {
 		mySum += int(b)
 	}
-	mySum -= int(buff[FSPOffsetSum])
+	mySum -= int(buff[fspOffsetSum])
 	mySum = (mySum + (mySum >> 8)) & 0xff
-	if mySum != int(buff[FSPOffsetSum]) {
-		err = newOpError(fmt.Sprintf("checksum fail, mySum %x, got %x", mySum, buff[FSPOffsetSum]))
+	if mySum != int(buff[fspOffsetSum]) {
+		err = newOpError(fmt.Sprintf("checksum fail, mySum %x, got %x", mySum, buff[fspOffsetSum]))
 		return
 	}
-	pkt.cmd = buff[FSPOffsetCmd]
+	pkt.cmd = buff[fspOffsetCmd]
 	pkt.sum = uint8(mySum)
-	pkt.key = binary.BigEndian.Uint16(buff[FSPOffsetKey:])
-	pkt.seq = binary.BigEndian.Uint16(buff[FSPOffsetSeq:])
-	pkt.len = binary.BigEndian.Uint16(buff[FSPOffsetLen:])
-	pkt.pos = binary.BigEndian.Uint32(buff[FSPOffsetPos:])
+	pkt.key = binary.BigEndian.Uint16(buff[fspOffsetKey:])
+	pkt.seq = binary.BigEndian.Uint16(buff[fspOffsetSeq:])
+	pkt.len = binary.BigEndian.Uint16(buff[fspOffsetLen:])
+	pkt.pos = binary.BigEndian.Uint32(buff[fspOffsetPos:])
 	if (int(pkt.len) + FSPHSzie) > len(buff) {
 		err = newOpError("fsp packet length field invalid")
 		return
@@ -134,12 +133,12 @@ func (pkt *fspPacket) write(s *Session) (err error) {
 		err = newOpError("packet payload too big")
 		return
 	}
-	sendBuff[FSPOffsetCmd] = pkt.cmd
-	sendBuff[FSPOffsetSum] = 0
-	binary.BigEndian.PutUint16(sendBuff[FSPOffsetKey:], pkt.key)
-	binary.BigEndian.PutUint16(sendBuff[FSPOffsetSeq:], pkt.seq)
-	binary.BigEndian.PutUint16(sendBuff[FSPOffsetLen:], pkt.len)
-	binary.BigEndian.PutUint32(sendBuff[FSPOffsetPos:], pkt.pos)
+	sendBuff[fspOffsetCmd] = pkt.cmd
+	sendBuff[fspOffsetSum] = 0
+	binary.BigEndian.PutUint16(sendBuff[fspOffsetKey:], pkt.key)
+	binary.BigEndian.PutUint16(sendBuff[fspOffsetSeq:], pkt.seq)
+	binary.BigEndian.PutUint16(sendBuff[fspOffsetLen:], pkt.len)
+	binary.BigEndian.PutUint32(sendBuff[fspOffsetPos:], pkt.pos)
 	used = FSPHSzie
 	sendBuff = append(sendBuff, pkt.buf[:pkt.len]...)
 	used += int(pkt.len)
@@ -159,7 +158,7 @@ func (pkt *fspPacket) write(s *Session) (err error) {
 		checksum += int(b)
 	}
 	checksum += used
-	sendBuff[FSPOffsetSum] = uint8(checksum + (checksum >> 8))
+	sendBuff[fspOffsetSum] = uint8(checksum + (checksum >> 8))
 	_, err = s.conn.WriteToUDP(sendBuff[:used], s.serverAddr)
 	if err != nil {
 		err = newOpError(err.Error())
