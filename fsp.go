@@ -32,7 +32,7 @@ import (
 
 const (
 	// VERSION represent fsp lib version.
-	VERSION = "1.0.0"
+	VERSION = "1.0.1"
 )
 
 // An Error represents a fsp error

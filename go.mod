@@ -2,4 +2,4 @@ module github.com/finove/fsp
 
 go 1.13
 
-require github.com/urfave/cli v1.22.1
+require github.com/spf13/cobra v0.0.5

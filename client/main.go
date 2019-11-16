@@ -2,13 +2,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/finove/fsp"
-	"github.com/urfave/cli"
 	"log"
 	"net"
 	"os"
-	"sort"
-	"time"
+
+	"github.com/finove/fsp"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -20,83 +19,13 @@ var (
 	showClientVersion              bool
 )
 
-func main() {
-	var app = cli.NewApp()
-	app.Name = "fspclient"
-	app.Version = "0.0.1"
-	app.Usage = "fsp client"
-	app.Description = "download file using fsp protocol"
-	app.Compiled, _ = time.Parse("2006-01-02 15:04:05", "2019-09-10 15:20:00")
-	app.Authors = []cli.Author{
-		cli.Author{
-			Name:  "finove",
-			Email: "finove@qq.com",
-		},
-	}
-	app.Copyright = "Copyright 2019 (c)"
-	app.Flags = []cli.Flag{
-		cli.StringFlag{
-			Name:        "ip",
-			Value:       "",
-			Usage:       "fsp server ip:port",
-			Destination: &serverIP,
-		},
-		cli.UintFlag{
-			Name:        "port",
-			Value:       0,
-			Usage:       "local port for used",
-			Destination: &localPort,
-		},
-		cli.UintFlag{
-			Name:        "dport",
-			Value:       0,
-			Usage:       "fsp server port",
-			Destination: &remotePort,
-		},
-		cli.StringFlag{
-			Name:        "p",
-			Value:       "",
-			Usage:       "fsp server password",
-			Destination: &serverPass,
-		},
-		cli.StringFlag{
-			Name:        "np",
-			Value:       "",
-			Usage:       "change the password of FSP server",
-			Destination: &serverNewPass,
-		},
-		cli.StringFlag{
-			Name:        "put",
-			Value:       "",
-			Usage:       "upload file path",
-			Destination: &cmdPut,
-		},
-		cli.StringFlag{
-			Name:        "ls",
-			Value:       "",
-			Usage:       "fsp command list files",
-			Destination: &cmdLS,
-		},
-		cli.StringFlag{
-			Name:        "g",
-			Value:       "",
-			Usage:       "fsp command get files",
-			Destination: &cmdGet,
-		},
-		cli.StringFlag{
-			Name:        "s",
-			Value:       "",
-			Usage:       "get file save path",
-			Destination: &cmdSave,
-		},
-		cli.BoolFlag{
-			Name:        "server_version",
-			Usage:       "show server version",
-			Destination: &showServerVersion,
-		},
-	}
-
-	app.Action = func(c *cli.Context) (err error) {
+var rootCmd = &cobra.Command{
+	Use:     "fspclient",
+	Version: "1.0.1",
+	Short:   "download file using fsp protocol",
+	Example: "some example usage",
+	Run: func(cmd *cobra.Command, args []string) {
+		var err error
 		var fspSession *fsp.Session
 		var addr *net.UDPAddr
 		var conn *net.UDPConn
@@ -138,12 +67,33 @@ func main() {
 			}
 		}
 		fspSession.Close()
-		return
-	}
+	},
+}
 
-	sort.Sort(cli.FlagsByName(app.Flags))
-	sort.Sort(cli.CommandsByName(app.Commands))
-	app.Run(os.Args)
+// Execute 执行命令行主程序
+func Execute() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+func init() {
+	rootCmd.Flags().StringVar(&serverIP, "ip", "", "fsp server ip:port")
+	rootCmd.Flags().UintVar(&localPort, "port", 0, "local port for used")
+	rootCmd.Flags().UintVar(&remotePort, "dport", 0, "fsp server port")
+	rootCmd.Flags().StringVarP(&serverPass, "password", "p", "", "fsp server password")
+	rootCmd.Flags().StringVar(&serverNewPass, "np", "", "change the password of FSP server")
+	rootCmd.Flags().StringVar(&cmdPut, "put", "", "upload file path")
+	rootCmd.Flags().StringVar(&cmdLS, "ls", "", "fsp command list files")
+	rootCmd.Flags().StringVarP(&cmdGet, "get", "g", "", "fsp command get files")
+	rootCmd.Flags().StringVarP(&cmdSave, "save", "s", "", "get file save path")
+	rootCmd.Flags().BoolVar(&showServerVersion, "server_version", false, "show server version")
+}
+
+func main() {
+	Execute()
+	return
 }
 
 func getFSPServerIP() (addr *net.UDPAddr, conn *net.UDPConn, err error) {
